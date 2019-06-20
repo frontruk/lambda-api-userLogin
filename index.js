@@ -35,6 +35,107 @@ module.exports = {
             page: intialPage.Item,
             // components: components.Items[0]
         });
+    },
+    async create(event) {
+
+        const userData = JSON.parse(event.body);
+        const user = {
+            id: uuidv4(),
+            username: userData.username,
+        };
+        console.log(event.body);
+        console.log(user);
+        await Util.DocumentClient.put({
+            TableName: userTable,
+            Item: user,
+        }).promise();
+
+        const pageId = uuidv4();
+        const website = {
+            id: uuidv4(),
+            name: `Site`,
+            subDomain: `${user.id}.sembler.io`,
+            enable_domain: false,
+            status: 'unpublished',
+            init_pageId: {
+                id: pageId,
+                name: 'Home',
+                path: '/home',
+            },
+            userId: user.id,
+            protocol_https: false,
+            order: 1
+        };
+
+        await Util.DocumentClient.put({
+            TableName: websiteTable,
+            Item: website,
+        }).promise();
+
+        const page = {
+            id: pageId,
+            name: 'Home',
+            path: '/home',
+            websiteId: `${website.id}`,
+            order: 1,
+            userId: `${user.id}`
+        };
+        await Util.DocumentClient.put({
+            TableName: pageTable,
+            Item: page,
+        }).promise();
+        return Util.envelop({
+            user: user,
+            website:website,
+            page:page
+        });
+    },
+    async get(event) {
+        const authenticatedUser = await authenticateAndGetUser(event);
+        if (!authenticatedUser) {
+            return Util.envelop('Token not present or invalid.', 422);
+        }
+        return Util.envelop({
+            user: authenticatedUser
+        });
+    },
+    async update(event) {
+        const authenticatedUser = await authenticateAndGetUser(event);
+        if (!authenticatedUser) {
+            return Util.envelop({message: 'Must be logged in.'}, 422);
+        }
+        const body = JSON.parse(event.body);
+        const user  = body.user;
+        if (!user) {
+            return Util.envelop('User must be specified.', 422);
+        }
+        const updatedUser = {
+            username: authenticatedUser.username,
+        };
+        if (user.username) {
+            // Verify email is not taken
+            const userWithThisEmail = await getUserByUsername(user.username);
+            if (userWithThisEmail.Count !== 0) {
+                return Util.envelop(`Email already taken: [${user.email}]`, 422);
+            }
+            updatedUser.email = user.email;
+        }
+        if (user.firstName) {
+            updatedUser.image =  user.firstName;
+        }
+        if (user.lastName) {
+            updatedUser.image =  user.lastName;
+        }
+        if (user.primaryWebsite) {
+            updatedUser.image =  user.primaryWebsite;
+        }
+
+        await Util.DocumentClient.put({
+            TableName: userTable,
+            Item: updatedUser,
+        }).promise();
+
+        return Util.envelop(updatedUser);
     }
 };
 function getUserByUsername(aUsername) {
@@ -90,4 +191,29 @@ function getComponentsByPageId(aPageId) {
         },
         Select: 'ALL_ATTRIBUTES',
     }).promise();
+}
+function getPageById(aPageId) {
+    return Util.DocumentClient.get(
+        {
+            TableName: pageTable,
+            Key: {
+                id: aPageId,
+            },
+        }
+    ).promise();
+}
+async function authenticateAndGetUser(event) {
+    try {
+        const token = getTokenFromEvent(event);
+        const decoded = jwt.verify(token);
+        const username = decoded.username;
+        const authenticatedUser = await getUserByUsername(username);
+        return authenticatedUser.Item;
+    } catch (err) {
+        return null;
+    }
+}
+function getTokenFromEvent(event) {
+    console.log('event.headers', event.headers)
+    return event.headers.Authorization.replace('Token ', '');
 }
